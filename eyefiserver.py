@@ -3,6 +3,7 @@
 """
 * Copyright (c) 2009, Jeffrey Tchang
 * Additional *pike
+* -- additional logging and email notification (JP)
 * All rights reserved.
 *
 *
@@ -62,6 +63,8 @@ import ConfigParser
 DEFAULTS = {'upload_uid': '-1', 'upload_gid': '-1', 'geotag_enable': '0'}
 
 import math
+
+import subprocess
 
 class Daemon:
     """
@@ -349,6 +352,15 @@ class EyeFiContentHandler(ContentHandler):
 # Implements an EyeFi server
 class EyeFiServer(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer):
 
+    # ---------------
+    # (JP) track session details (# files, size)
+    global_counter = 0
+    session_counter = 0
+    session_upload_size = 0
+    session_files = ""
+    session_start_time = 0
+    # ---------------
+
     def serve_forever(self):
         while self.run:
             try:
@@ -387,6 +399,12 @@ class EyeFiServer(SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer):
                 connection, address = self.socket.accept()
                 eyeFiLogger.debug("Incoming connection from client %s" % address[0])
 
+                # ---------------
+                # (JP) set start time if not set
+                if (self.session_start_time == 0):
+                    self.session_start_time = time.time()
+                # ---------------
+
                 connection.settimeout(None)
                 return (connection, address)
 
@@ -424,13 +442,13 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         try:
-            eyeFiLogger.debug(self.command + " " + self.path + " " + self.request_version)
+            #eyeFiLogger.debug(self.command + " " + self.path + " " + self.request_version)
 
             SOAPAction = ""
-            eyeFiLogger.debug("Headers received in GET request:")
+            # eyeFiLogger.debug("Headers received in GET request:")
             for headerName in self.headers.keys():
                 for headerValue in self.headers.getheaders(headerName):
-                    eyeFiLogger.debug(headerName + ": " + headerValue)
+                    # eyeFiLogger.debug(headerName + ": " + headerValue)
                     if( headerName == "soapaction"):
                         SOAPAction = headerValue
 
@@ -447,17 +465,16 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
             eyeFiLogger.error(traceback.format_exc())
             raise
 
-
     def do_POST(self):
         try:
-            eyeFiLogger.debug(self.command + " " + self.path + " " + self.request_version)
+            # eyeFiLogger.debug(self.command + " " + self.path + " " + self.request_version)
 
             SOAPAction = ""
             contentLength = ""
 
             # Loop through all the request headers and pick out ones that are relevant
 
-            eyeFiLogger.debug("Headers received in POST request:")
+            # eyeFiLogger.debug("Headers received in POST request:")
             for headerName in self.headers.keys():
                 for headerValue in self.headers.getheaders(headerName):
 
@@ -467,11 +484,11 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
                     if( headerName == "content-length"):
                         contentLength = int(headerValue)
 
-                    eyeFiLogger.debug(headerName + ": " + headerValue)
+                    # eyeFiLogger.debug(headerName + ": " + headerValue)
 
 
             # Read contentLength bytes worth of data
-            eyeFiLogger.debug("Attempting to read " + str(contentLength) + " bytes of data")
+            # eyeFiLogger.debug("Attempting to read " + str(contentLength) + " bytes of data")
             # postData = self.rfile.read(contentLength)
             try:
                 from StringIO import StringIO
@@ -491,17 +508,16 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
             postData = mem.getvalue()
             mem.close()
 
-            eyeFiLogger.debug("Finished reading " + str(contentLength) + " bytes of data")
+            # eyeFiLogger.debug("Finished reading " + str(contentLength) + " bytes of data")
 
             # Perform action based on path and SOAPAction
-            # A SOAPAction of StartSession indicates the beginning of an EyeFi
-            # authentication request
+            # A SOAPAction of StartSession indicates the beginning of an EyeFi authentication request
             if((self.path == "/api/soap/eyefilm/v1") and (SOAPAction == "\"urn:StartSession\"")):
                 eyeFiLogger.debug("Got StartSession request")
                 response = self.startSession(postData)
                 contentLength = len(response)
 
-                eyeFiLogger.debug("StartSession response: " + response)
+                # eyeFiLogger.debug("StartSession response: " + response)
 
                 self.send_response(200)
                 self.send_header('Date', self.date_time_string())
@@ -523,7 +539,7 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
                 response = self.getPhotoStatus(postData)
                 contentLength = len(response)
 
-                eyeFiLogger.debug("GetPhotoStatus response: " + response)
+                # eyeFiLogger.debug("GetPhotoStatus response: " + response)
 
                 self.send_response(200)
                 self.send_header('Date', self.date_time_string())
@@ -539,11 +555,11 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
 
             # If the URL is upload and there is no SOAPAction the card is ready to send a picture to me
             if((self.path == "/api/soap/eyefilm/v1/upload") and (SOAPAction == "")):
-                eyeFiLogger.debug("Got upload request")
+                # eyeFiLogger.debug("Got upload request")
                 response = self.uploadPhoto(postData)
                 contentLength = len(response)
 
-                eyeFiLogger.debug("Upload response: " + response)
+                # eyeFiLogger.debug("Upload response: " + response)
 
                 self.send_response(200)
                 self.send_header('Date', self.date_time_string())
@@ -558,11 +574,11 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
 
             # If the URL is upload and SOAPAction is MarkLastPhotoInRoll
             if((self.path == "/api/soap/eyefilm/v1") and (SOAPAction == "\"urn:MarkLastPhotoInRoll\"")):
-                eyeFiLogger.debug("Got MarkLastPhotoInRoll request")
+                # eyeFiLogger.debug("Got MarkLastPhotoInRoll request")
                 response = self.markLastPhotoInRoll(postData)
                 contentLength = len(response)
 
-                eyeFiLogger.debug("MarkLastPhotoInRoll response: " + response)
+                # eyeFiLogger.debug("MarkLastPhotoInRoll response: " + response)
                 self.send_response(200)
                 self.send_header('Date', self.date_time_string())
                 self.send_header('Pragma','no-cache')
@@ -575,7 +591,27 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(response)
                 self.wfile.flush()
 
-                eyeFiLogger.debug("Connection closed.")
+                # ---------------
+                # format upload size
+                uploaded_str = human_size(self.server.session_upload_size)
+
+                # elapsed time (secs)
+                elapsed_time = time.time() - self.server.session_start_time
+                # formated into HH:MM:SS
+                elapsed_str = str(timedelta(seconds=elapsed_time))
+
+                eyeFiLogger.debug("upload complete: duration: " + elapsed_str + ", uploaded: " + str(self.server.session_counter) + ", size: " + uploaded_str + ", total(history): " + str(self.server.global_counter))
+
+                # (JP) send notification on upload complete
+                subprocess.call(['/usr/local/bin/eyefi-notify.sh', str(self.server.session_counter), uploaded_str, self.server.session_files])
+                
+                # reset session counters
+                self.server.session_files = ""
+                self.server.session_counter = 0
+                self.server.session_upload_size = 0
+                self.server.session_start_time = 0;
+                # ---------------
+
         except:
             eyeFiLogger.error("Got an an exception:")
             eyeFiLogger.error(traceback.format_exc())
@@ -610,30 +646,29 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
         # Get the content-type header which looks something like this
         # content-type: multipart/form-data; boundary=---------------------------02468ace13579bdfcafebabef00d
         contentTypeHeader = self.headers.getheaders('content-type').pop()
-        eyeFiLogger.debug(contentTypeHeader)
+        # eyeFiLogger.debug(contentTypeHeader)
 
         # Extract the boundary parameter in the content-type header
         headerParameters = contentTypeHeader.split(";")
-        eyeFiLogger.debug(headerParameters)
+        # eyeFiLogger.debug(headerParameters)
 
         boundary = headerParameters[-1].split("=")
         boundary = boundary[1].strip()
-        eyeFiLogger.debug("Extracted boundary: " + boundary)
+        # eyeFiLogger.debug("Extracted boundary: " + boundary)
 
         # eyeFiLogger.debug("uploadPhoto postData: " + postData)
 
         # Parse the multipart/form-data
         form = cgi.parse_multipart(postDataInMemoryFile, {"boundary":boundary,"content-disposition":self.headers.getheaders('content-disposition')})
-        eyeFiLogger.debug("Available multipart/form-data: " + str(form.keys()))
+        # eyeFiLogger.debug("Available multipart/form-data: " + str(form.keys()))
 
         # Parse the SOAPENVELOPE using the EyeFiContentHandler()
         soapEnvelope = form['SOAPENVELOPE'][0]
-        eyeFiLogger.debug("SOAPENVELOPE: " + soapEnvelope)
+        # eyeFiLogger.debug("SOAPENVELOPE: " + soapEnvelope)
         handler = EyeFiContentHandler()
         parser = xml.sax.parseString(soapEnvelope,handler)
 
-        eyeFiLogger.debug("Extracted elements: " + str(handler.extractedElements))
-
+        # eyeFiLogger.debug("Extracted elements: " + str(handler.extractedElements))
 
         imageTarfileName = handler.extractedElements["filename"]
 
@@ -642,27 +677,29 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
         gid = self.server.config.getint('EyeFiServer','upload_gid')
         file_mode = self.server.config.get('EyeFiServer','upload_file_mode')
         dir_mode = self.server.config.get('EyeFiServer','upload_dir_mode')
-        eyeFiLogger.debug("Using uid/gid %d/%d"%(uid,gid))
-        eyeFiLogger.debug("Using file_mode " + file_mode)
-        eyeFiLogger.debug("Using dir_mode " + dir_mode)
+        # eyeFiLogger.debug("Using uid/gid %d/%d"%(uid,gid))
+        # eyeFiLogger.debug("Using file_mode " + file_mode)
+        # eyeFiLogger.debug("Using dir_mode " + dir_mode)
 
         geotag_enable = int(self.server.config.getint('EyeFiServer','geotag_enable'))
         if geotag_enable:
             geotag_accuracy = int(self.server.config.get('EyeFiServer','geotag_accuracy'))
 
         imageTarPath = os.path.join(tempfile.gettempdir(), imageTarfileName)
-        eyeFiLogger.debug("Generated path " + imageTarPath)
+        # eyeFiLogger.debug("Generated path " + imageTarPath)
 
         fileHandle = open(imageTarPath, 'wb')
-        eyeFiLogger.debug("Opened file " + imageTarPath + " for binary writing")
+        # eyeFiLogger.debug("Opened file " + imageTarPath + " for binary writing")
 
         fileHandle.write(form['FILENAME'][0])
-        eyeFiLogger.debug("Wrote file " + imageTarPath)
+        # eyeFiLogger.debug("Wrote file " + imageTarPath)
+
+        image_size = fileHandle.tell()
 
         fileHandle.close()
-        eyeFiLogger.debug("Closed file " + imageTarPath)
+        # eyeFiLogger.debug("Closed file " + imageTarPath)
 
-        eyeFiLogger.debug("Extracting TAR file " + imageTarPath)
+        # eyeFiLogger.debug("Extracting TAR file " + imageTarPath)
         try:
             imageTarfile = tarfile.open(imageTarPath)
         except ReadError, error:
@@ -679,7 +716,7 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
             timezone = timeoffset / 60 / 60 * -1
             imageDate = datetime.fromtimestamp(member.mtime) - timedelta(hours=timezone)
             uploadDir = imageDate.strftime(self.server.config.get('EyeFiServer','upload_dir'))
-            eyeFiLogger.debug("Creating folder " + uploadDir)
+            # eyeFiLogger.debug("Creating folder " + uploadDir)
             if not os.path.isdir(uploadDir):
                 os.makedirs(uploadDir)
                 fix_ownership(uploadDir, uid, gid)
@@ -688,7 +725,7 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
 
             f=imageTarfile.extract(member, uploadDir)
             imagePath = os.path.join(uploadDir, member.name)
-            eyeFiLogger.debug("imagePath " + imagePath)
+            # eyeFiLogger.debug("imagePath " + imagePath)
             os.utime(imagePath, (member.mtime + timeoffset, member.mtime + timeoffset))
             fix_ownership(imagePath, uid, gid)
             if file_mode != "":
@@ -712,10 +749,10 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
                 except:
                     eyeFiLogger.error("Error processing LOG file " + imagePath)
 
-        eyeFiLogger.debug("Closing TAR file " + imageTarPath)
+        # eyeFiLogger.debug("Closing TAR file " + imageTarPath)
         imageTarfile.close()
 
-        eyeFiLogger.debug("Deleting TAR file " + imageTarPath)
+        # eyeFiLogger.debug("Deleting TAR file " + imageTarPath)
         os.remove(imageTarPath)
 
         # Create the XML document to send back
@@ -735,6 +772,17 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
         SOAPBodyElement.appendChild(uploadPhotoResponseElement)
         SOAPElement.appendChild(SOAPBodyElement)
         doc.appendChild(SOAPElement)
+
+        # (JP) track uploaded files during session
+        self.server.session_counter += 1;
+        self.server.global_counter += 1;
+        self.server.session_upload_size += image_size
+        self.server.session_files = self.server.session_files + "\n" + imagePath
+
+        # format upload size
+        uploaded_str = human_size(image_size)
+
+        eyeFiLogger.debug("Uploaded #" + str(self.server.session_counter) + ": " + imagePath + ", size: " + uploaded_str)
 
         return doc.toxml(encoding="UTF-8")
 
@@ -872,21 +920,21 @@ class EyeFiRequestHandler(BaseHTTPRequestHandler):
         return d
 
     def startSession(self, postData):
-        eyeFiLogger.debug("Delegating the XML parsing of startSession postData to EyeFiContentHandler()")
+        # eyeFiLogger.debug("Delegating the XML parsing of startSession postData to EyeFiContentHandler()")
         handler = EyeFiContentHandler()
         parser = xml.sax.parseString(postData,handler)
 
-        eyeFiLogger.debug("Extracted elements: " + str(handler.extractedElements))
+        # eyeFiLogger.debug("Extracted elements: " + str(handler.extractedElements))
 
         # Retrieve it from C:\Documents and Settings\<User>\Application Data\Eye-Fi\Settings.xml
         mac_to_uploadkey_map = self._get_mac_uploadkey_dict()
         mac = handler.extractedElements["macaddress"]
         upload_key = mac_to_uploadkey_map[mac]
-        eyeFiLogger.debug("Got MAC address of " + mac)
-        eyeFiLogger.debug("Setting Eye-Fi upload key to " + upload_key)
+        # eyeFiLogger.debug("Got MAC address of " + mac)
+        # eyeFiLogger.debug("Setting Eye-Fi upload key to " + upload_key)
 
         credentialString = mac + handler.extractedElements["cnonce"] + upload_key
-        eyeFiLogger.debug("Concatenated credential string (pre MD5): " + credentialString)
+        # eyeFiLogger.debug("Concatenated credential string (pre MD5): " + credentialString)
 
         # Return the binary data represented by the hexadecimal string
         # resulting in something that looks like "\x00\x18V\x03\x04..."
@@ -982,6 +1030,31 @@ def runEyeFi():
     eyeFiServer.config = config
     eyeFiLogger.info("Eye-Fi server started listening on port " + str(server_address[1]))
     eyeFiServer.serve_forever()
+
+def human_size(size_bytes):
+    """
+    format a size in bytes into a 'human' file size, e.g. bytes, KB, MB, GB, TB, PB
+    Note that bytes/KB will be reported in whole numbers but MB and above will have greater precision
+    e.g. 1 byte, 43 bytes, 443 KB, 4.3 MB, 4.43 GB, etc
+    """
+    if size_bytes == 1:
+        # because I really hate unnecessary plurals
+        return "1 byte"
+
+    suffixes_table = [('bytes',0),('KB',0),('MB',1),('GB',2),('TB',2), ('PB',2)]
+
+    num = float(size_bytes)
+    for suffix, precision in suffixes_table:
+        if num < 1024.0:
+            break
+        num /= 1024.0
+
+    if precision == 0:
+        formatted_size = "%d" % num
+    else:
+        formatted_size = str(round(num, ndigits=precision))
+
+    return "%s %s" % (formatted_size, suffix)
 
 class MyDaemon(Daemon):
     def run(self):
